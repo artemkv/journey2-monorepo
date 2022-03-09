@@ -1,0 +1,92 @@
+# journey2-events-service-environment
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Creates an environment for the events service
+
+Resources:
+
+  # Create an SNS topic for actions
+  ActionSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties: 
+      DisplayName: "Journey2 Action Topic"
+      TopicName: "journey2-actions"
+
+  # Create an SNS topic for errors
+  ErrorSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties: 
+      DisplayName: "Journey2 Error Topic"
+      TopicName: "journey2-errors"
+
+  # Create a role for publishing events
+  EventsServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: "journey2-events-service-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+
+  # Allow the role to use publish to the action topic
+  PublishToActionSNSTopicPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: "publish-to-journey2-actions"
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+            - 'sns:Publish'
+          Resource:
+            - !Ref ActionSNSTopic
+      Roles:
+      - !Ref EventsServiceRole
+
+  # Allow the role to use publish to the error topic
+  PublishToErrorSNSTopicPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: "publish-to-journey2-errors"
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+            - 'sns:Publish'
+          Resource:
+            - !Ref ErrorSNSTopic
+      Roles:
+      - !Ref EventsServiceRole
+
+Outputs:
+  ActionSNSTopic:
+    Description: Action Topic ARN
+    Value: !Ref ActionSNSTopic
+    Export:
+      Name: Journey2ActionSNSTopic
+  ErrorSNSTopic:
+    Description: Error Topic ARN
+    Value: !Ref ErrorSNSTopic
+    Export:
+      Name: Journey2ErrorSNSTopic
+
+  EventsServiceRole:
+    Description: The role for publishing events
+    Value: !Ref EventsServiceRole
+    Export:
+      Name: Journey2EventsServiceRoleName
+  EventsServiceRoleARN:
+    Description: ARN of the role for publishing events
+    Value: !GetAtt
+      - EventsServiceRole
+      - Arn
+    Export:
+      Name: Journey2EventsServiceRoleARN

@@ -1,0 +1,340 @@
+# journey2-stats-service-environment
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Creates an environment for the stats service
+
+Parameters:
+  AlarmEMail:
+    Description: EMail address to notify if there are any operational issues
+    Type: String
+    AllowedPattern: >-
+      ([a-zA-Z0-9_\-\.]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,4}|[0-9]{1,3})(\]?)
+    ConstraintDescription: Must be a valid email address.
+    Default: "artemkv@gmail.com"
+
+Resources:
+
+  # Create an SQS queue for actions
+  ActionsQueue:
+    Type: 'AWS::SQS::Queue'
+    Properties:
+      QueueName: "journey2-actions"
+      VisibilityTimeout: 120
+
+  # Allow SNS service to send messages to actions queue
+  ActionsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Id: ActionsQueuePolicy
+        Version: '2012-10-17'
+        Statement:
+        - Sid: Allow-SendMessage
+          Effect: Allow
+          Principal:
+            AWS: "*"
+          Action:
+          - sqs:SendMessage
+          Resource: "*"
+          Condition:
+            ArnEquals:
+              'aws:SourceArn':
+                Fn::ImportValue: Journey2ActionSNSTopic
+      Queues:
+      - !Ref ActionsQueue
+
+  # Subscribe action queue to action topic
+  ActionsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: sqs
+      Endpoint: !GetAtt ActionsQueue.Arn
+      RawMessageDelivery: true
+      TopicArn:
+        Fn::ImportValue: Journey2ActionSNSTopic
+
+  # Create an SQS queue for errors
+  ErrorsQueue:
+    Type: 'AWS::SQS::Queue'
+    Properties:
+      QueueName: "journey2-errors"
+      VisibilityTimeout: 120
+
+  # Allow SNS service to send messages to errors queue
+  ErrorsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Id: ErrorsQueuePolicy
+        Version: '2012-10-17'
+        Statement:
+        - Sid: Allow-SendMessage
+          Effect: Allow
+          Principal:
+            AWS: "*"
+          Action:
+          - sqs:SendMessage
+          Resource: "*"
+          Condition:
+            ArnEquals:
+              'aws:SourceArn':
+                Fn::ImportValue: Journey2ErrorSNSTopic
+      Queues:
+      - !Ref ErrorsQueue
+
+  # Subscribe error queue to error topic
+  ErrorsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: sqs
+      Endpoint: !GetAtt ErrorsQueue.Arn
+      RawMessageDelivery: true
+      TopicArn:
+        Fn::ImportValue: Journey2ErrorSNSTopic
+
+  # Create a role for consuming events
+  StatsServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: "journey2-stats-service-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+
+  # Allow the role to receive and delete messages from actions queue
+  ListenToActionsQueuePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ListenToActionsQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'sqs:DeleteMessage'
+              - 'sqs:ReceiveMessage'
+              - 'sqs:GetQueueAttributes'
+            Resource:
+              - !GetAtt 
+                - ActionsQueue
+                - Arn
+      Roles:
+      - !Ref StatsServiceRole
+
+  # Allow the role to receive and delete messages from errors queue
+  ListenToErrorsQueuePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ListenToErrorsQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'sqs:DeleteMessage'
+              - 'sqs:ReceiveMessage'
+              - 'sqs:GetQueueAttributes'
+            Resource:
+              - !GetAtt 
+                - ErrorsQueue
+                - Arn
+      Roles:
+      - !Ref StatsServiceRole
+
+  # Allow the role to write to CloudWatch
+  WriteToCloudWatchPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: WriteToCloudWatch
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Resource: arn:aws:logs:*:*:*
+      Roles:
+      - !Ref StatsServiceRole
+
+  # Create topic for action alarms
+  ActionsAlarmTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      Subscription:
+        - Endpoint: !Ref AlarmEMail
+          Protocol: email
+
+  # Create cloud watch alarm for actions
+  ActionsQueueDepthAlarm:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmDescription: Alarm if queue depth grows beyond 1000 messages
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt 
+            - ActionsQueue
+            - QueueName
+      Statistic: Sum
+      Period: 600 # in seconds
+      EvaluationPeriods: 1
+      Threshold: 100
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref ActionsAlarmTopic
+
+  # Create topic for error alarms
+  ErrorsAlarmTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      Subscription:
+        - Endpoint: !Ref AlarmEMail
+          Protocol: email
+
+  # Create cloud watch alarm for actions
+  ErrorsQueueDepthAlarm:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmDescription: Alarm if queue depth grows beyond 1000 messages
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt
+            - ErrorsQueue
+            - QueueName
+      Statistic: Sum
+      Period: 600 # in seconds
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref ErrorsAlarmTopic
+
+  # DynamoDB table - TODO: Review later
+  StatsDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: "journey2stats"
+      AttributeDefinitions:
+        - 
+          AttributeName: "Key"
+          AttributeType: "S"
+        - 
+          AttributeName: "SortKey"
+          AttributeType: "S"
+      KeySchema:
+        - 
+          AttributeName: "Key"
+          KeyType: "HASH"
+        - 
+          AttributeName: "SortKey"
+          KeyType: "RANGE"
+      BillingMode: PAY_PER_REQUEST
+
+  # DynamoDB table - TODO: Review later
+  AppDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: "journey2app"
+      AttributeDefinitions:
+        - 
+          AttributeName: "Key"
+          AttributeType: "S"
+        - 
+          AttributeName: "SortKey"
+          AttributeType: "S"
+      KeySchema:
+        - 
+          AttributeName: "Key"
+          KeyType: "HASH"
+        - 
+          AttributeName: "SortKey"
+          KeyType: "RANGE"
+      BillingMode: PAY_PER_REQUEST
+
+  # Allow the role to access DynamoDB - TODO: Review later
+  AccessDynamoDBStatsTablePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: AccessDynamoDBStatsTable
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'dynamodb:GetItem'
+              - 'dynamodb:BatchGetItem'
+              - 'dynamodb:Query'
+              - 'dynamodb:BatchWriteItem'
+              - 'dynamodb:PutItem'
+              - 'dynamodb:UpdateItem'
+            Resource:
+              - !GetAtt 
+                - StatsDBTable
+                - Arn
+      Roles:
+      - !Ref StatsServiceRole
+
+  # Allow the role to access DynamoDB - TODO: Review later
+  AccessDynamoDBAppTablePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: AccessDynamoDBAppTable
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'dynamodb:GetItem'
+              - 'dynamodb:BatchGetItem'
+              - 'dynamodb:Query'
+            Resource:
+              - !GetAtt 
+                - AppDBTable
+                - Arn
+      Roles:
+      - !Ref StatsServiceRole
+
+Outputs:
+  ActionsQueueURL:
+    Description: URL of actions SQS Queue
+    Value: !Ref ActionsQueue
+  ActionsQueueARN:
+    Description: ARN of actions SQS Queue
+    Value: !GetAtt
+      - ActionsQueue
+      - Arn
+    Export:
+      Name: Journey2ActionsQueueARN
+
+  ErrorsQueueURL:
+    Description: URL of errors SQS Queue
+    Value: !Ref ErrorsQueue
+  ErrorsQueueARN:
+    Description: ARN of errors SQS Queue
+    Value: !GetAtt
+      - ErrorsQueue
+      - Arn
+    Export:
+      Name: Journey2ErrorsQueueARN
+
+  StatsServiceRole:
+    Description: The role for consuming events
+    Value: !Ref StatsServiceRole
+  StatsServiceRoleARN:
+    Description: ARN of the role for consuming events
+    Value: !GetAtt
+      - StatsServiceRole
+      - Arn
+    Export:
+      Name: Journey2StatsServiceRoleARN

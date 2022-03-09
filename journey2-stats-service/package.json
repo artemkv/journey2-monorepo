@@ -1,0 +1,15 @@
+{
+    "name": "journey2.services.events",
+    "version": "1.0.0",
+    "description": "Journey2 Events Service",
+    "author": {
+        "name": "artemkv",
+        "email": "artemkv@gmail.com"
+    },
+    "dependencies": {
+        "@artemkv/datetimeutil": "^1.1.0",
+        "aws-sdk": "^2.978.0"
+    },
+    "devDependencies": {},
+    "scripts": {}
+}
